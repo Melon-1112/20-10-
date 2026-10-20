@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>20/10 Gửi người xinh đẹp</title>
+<link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600;700&display=swap&subset=vietnamese" rel="stylesheet">
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; background:radial-gradient(ellipse at 50% 42%,#35113b 0%,#17091d 70%,#08030b 100%); font-family:'Dancing Script',cursive; }
+  canvas#c { position:fixed; inset:0; width:100%; height:100%; display:block; }
+
+  
+  #openBtn {
+    position:fixed; left:50%; bottom:4vh; transform:translateX(-50%) translateY(20px);
+    padding:12px 28px; font:700 22px 'Dancing Script',cursive; color:#fff;
+    background:linear-gradient(135deg,#ff5ca4,#ff2d7a); border:none; border-radius:999px;
+    box-shadow:0 6px 24px rgba(255,60,140,.55); cursor:pointer;
+    opacity:0; pointer-events:none; transition:opacity 1s, transform 1s;
+  }
+  #openBtn.show { opacity:1; pointer-events:auto; transform:translateX(-50%); animation:pulse 1.6s infinite 1s; }
+  @keyframes pulse { 0%,100%{ box-shadow:0 6px 24px rgba(255,60,140,.55);} 50%{ box-shadow:0 6px 38px rgba(255,60,140,.95);} }
+
+  /* ===== Lớp phủ chứa thư ===== */
+  #overlay {
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:rgba(10,3,14,.75); backdrop-filter:blur(4px);
+    opacity:0; pointer-events:none; transition:opacity .5s; z-index:10;
+  }
+  #overlay.on { opacity:1; pointer-events:auto; }
+
+  /* Phong bì */
+  .env { position:absolute; width:min(300px,76vw); height:190px; background:#ff8fb8; border-radius:8px;
+         perspective:800px; transition:transform .9s ease, opacity .9s ease; box-shadow:0 10px 40px rgba(0,0,0,.5); }
+  .flap { position:absolute; top:0; left:0; width:100%; height:52%; background:#ff6b9d;
+          clip-path:polygon(0 0,100% 0,50% 100%); transform-origin:top; transition:transform .8s ease; z-index:3; }
+  .pocket { position:absolute; inset:0; background:#ff7aa8; border-radius:8px;
+            clip-path:polygon(0 0,50% 52%,100% 0,100% 100%,0 100%); z-index:4; }
+  .mini { position:absolute; left:6%; width:88%; height:88%; bottom:6%; background:#fff8f0; border-radius:6px;
+          transition:transform 1s ease .6s; z-index:2; }
+  .env.open .flap { transform:rotateX(180deg); z-index:1; }
+  .env.open .mini { transform:translateY(-55%); }
+  .env.out { transform:translateY(120px) scale(.9); opacity:0; }
+
+  
+  .paper {
+    position:relative; width:min(360px,86vw); padding:38px 28px 34px; box-sizing:border-box;
+    background:linear-gradient(#fffaf3,#ffeef4); border-radius:14px; text-align:center;
+    box-shadow:0 14px 50px rgba(255,80,150,.45); color:#b3225f;
+    opacity:0; transform:scale(.5) rotate(-6deg); transition:opacity .8s, transform .9s cubic-bezier(.2,1.3,.4,1);
+  }
+  .paper.show { opacity:1; transform:scale(1) rotate(0); }
+  .paper .top { font-size:44px; line-height:1; margin-bottom:10px; animation:float 2.2s ease-in-out infinite; }
+  .paper .msg { font-size:27px; line-height:1.45; min-height:150px; font-weight:700; }
+  .paper .msg::after { content:'|'; animation:blink .8s infinite; opacity:.6; }
+  .paper .msg.done::after { content:''; }
+  .close { position:absolute; top:8px; right:12px; background:none; border:none; font-size:26px; color:#c04a80; cursor:pointer; }
+  @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
+  @keyframes blink { 50%{opacity:0} }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="openBtn">💌 Mở thư</button>
+
+<div id="overlay">
+  <div class="env" id="env">
+    <div class="mini"></div>
+    <div class="flap"></div>
+    <div class="pocket"></div>
+  </div>
+  <div class="paper" id="paper">
+    <button class="close" id="closeBtn" aria-label="Đóng">✕</button>
+    <div class="top">🌸</div>
+    <div class="msg" id="msg"></div>
+  </div>
+</div>
+
+<script>
+/* ================== CẤU HÌNH (sửa ở đây) ================== */
+const MESSAGE  = "20/10 chúc bạn xinh nhất lớp thật nhiều niềm vui, tươi cười như hoa! 🌸";
+const ALL_PINK = false;   // Bảng màu tự nhiên: hồng, kem, xanh lá và nơ pastel
+const T_HEART  = 2200;    // ms: lúc các trái tim nhỏ tụ lại thành trái tim to
+const T_FLOWER = 6200;    // ms: lúc trái tim bắt đầu tách ra thành bông hoa (= T_HEART + 4000)
+const SPREAD   = 2500;    // ms: các trái tim "rời" trái tim to lần lượt trong khoảng này (càng lớn càng chậm, mượt)
+const DUR      = 3800;    // ms: thời gian bay của mỗi trái tim về chỗ trong bông hoa (càng lớn càng chậm)
+const T_BUTTON = T_FLOWER + SPREAD + DUR + 500;  // ms: lúc hiện nút "Mở thư" (sau khi bông hoa xong)
+/* ========================================================== */
+
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let W, H, ps = [], floaters = [], cx, hcy, hs;
+const rnd = (a, b) => a + Math.random() * (b - a);
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const TAU = Math.PI * 2;
+
+/* ---- Vẽ sprite trái tim nhỏ (cache theo màu) ---- */
+const sprites = {};
+function sprite(col) {
+  if (sprites[col]) return sprites[col];
+  const s = document.createElement('canvas'); s.width = s.height = 48;
+  const g = s.getContext('2d'); g.fillStyle = col; g.beginPath();
+  for (let t = -Math.PI, first = true; t <= Math.PI; t += 0.05, first = false) {
+    const x = 16 * Math.pow(Math.sin(t), 3);
+    const y = -(13*Math.cos(t) - 5*Math.cos(2*t) - 2*Math.cos(3*t) - Math.cos(4*t));
+    const px = 24 + x * 1.35, py = 22 + y * 1.35;
+    first ? g.moveTo(px, py) : g.lineTo(px, py);
+  }
+  g.closePath();
+  g.fill();
+  g.lineWidth = 0.8;
+  g.strokeStyle = 'rgba(255,255,255,0.48)';
+  g.stroke();
+  // Điểm sáng nhẹ giúp từng trái tim rõ nét hơn trên nền tối.
+  g.beginPath();
+  g.fillStyle = 'rgba(255,255,255,0.28)';
+  g.arc(20, 15, 2.1, 0, TAU);
+  g.fill();
+  return sprites[col] = s;
+}
+
+const PINKS = ['#ff5ca4', '#ff7eb6', '#ff3d8b', '#ffa3cb', '#ff6f9f', '#e83e8c'];
+
+/* ---- Bảng màu bông hoa ---- */
+const C = ALL_PINK ? {
+  lily: ['#ff4f9a', '#ff8fc0', '#ffc2dc'], core: '#e83e8c',
+  rose: ['#ff6f9f', '#ffa3cb', '#ff5c93'],
+  cream: ['#ffd1e3', '#ffb3d1'], green: ['#ff7eb6', '#ff9ec9'],
+  stem: ['#d81b60', '#c2185b'], fern: ['#ad1457', '#c2185b'],
+  bow: ['#ffc2dc', '#ff8fc0', '#ffd9e8']
+} : {
+  lily: ['#ff4f9a', '#ff8fc0', '#ffc2dc'], core: '#e6ee9c',
+  rose: ['#ff8a80', '#ffab9f', '#ff7a70'],
+  cream: ['#fff0d6', '#ffe0b2'], green: ['#aed581', '#9ccc65'],
+  stem: ['#2e7d32', '#388e3c'], fern: ['#1b5e20', '#2e5d2a'],
+  bow: ['#fff59d', '#ffc2dc', '#ffee77']
+};
+
+/* ---- Các kiểu bông hoa (mỗi hàm trả về 1 điểm [x, y, màu]) ---- */
+function lilyPt(x, y, r, rot) {                       // hoa ly: 6 cánh nhọn
+  const th = rnd(0, TAU), s = 0.06 + 0.94 * Math.pow(Math.random(), 0.55);
+  const rr = r * Math.abs(Math.cos(3 * th)) * s;
+  const a = th + rot;
+  return [x + rr * Math.cos(a), y + rr * Math.sin(a),
+          s < 0.16 ? C.core : s > 0.7 ? C.lily[0] : s > 0.4 ? C.lily[1] : C.lily[2]];
+}
+function rosePt(x, y, r) {                            // hoa hồng: tròn, các lớp cánh xoắn ốc
+  const th = rnd(0, TAU), s = Math.sqrt(Math.random()), rr = r * (1 + 0.06 * Math.sin(5 * th)) * s;
+  const band = Math.floor(s * 4.2 + th / TAU * 1.2) % 3;
+  return [x + rr * Math.cos(th), y + rr * Math.sin(th), C.rose[band]];
+}
+function carnPt(x, y, r, cols) {                      // cẩm chướng: tròn, mép nhấp nhô
+  const th = rnd(0, TAU), s = Math.sqrt(Math.random()), rr = r * (1 + 0.14 * Math.sin(7 * th)) * s;
+  return [x + rr * Math.cos(th), y + rr * Math.sin(th), pick(cols)];
+}
+
+/* ---- Tạo các hạt + vị trí đích cho từng giai đoạn ---- */
+function build() {
+  W = innerWidth; H = innerHeight;
+  const dpr = Math.min(devicePixelRatio || 1, 1.5);
+  cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const u = Math.min(W, H * 0.8);
+  cx = W / 2; hcy = H * 0.45; hs = u * 0.62 / 34;        // trái tim to
+  const sz = Math.max(0.72, Math.min(1.3, u / 650));
+
+  /* --- Bố cục 1 bông hoa có nơ (đơn vị q) --- */
+  const q = Math.min(W * 0.125, H * 0.078);
+  const yc = H * 0.34;                                    // tâm bông hoa
+  const Yb = yc + 4.3 * q;                                // chỗ thắt nơ trên cuống
+  const Ye = yc + 6.2 * q;                                // đầu cuống hoa
+
+  const T = [];                                           // danh sách điểm đích của bông hoa
+  const bouquetLines = [];                                // cuống hoa dạng nét vector liền
+
+  // cánh hoa hình elip: n hạt, hướng ang, cách tâm dist, bán trục A (dọc cánh) x B (ngang cánh), 3 màu từ gốc → ngọn
+  function petal(n, ang, dist, A, B, cols) {
+    const ca = Math.cos(ang), sa = Math.sin(ang), pcx = cx + dist * q * ca, pcy = yc + dist * q * sa;
+    for (let i = 0; i < n; i++) {
+      const th = rnd(0, TAU), s = Math.sqrt(Math.random()), u = s * Math.cos(th), v = s * Math.sin(th) * (1 - 0.3 * u);
+      const lx = u * A * q, ly = v * B * q, f = (u + 1) / 2;
+      T.push([pcx + lx * ca - ly * sa, pcy + lx * sa + ly * ca, f < 0.3 ? cols[0] : f < 0.7 ? cols[1] : cols[2]]);
+    }
+  }
+  const N = 8, a0 = -Math.PI / 2;
+  for (let k = 0; k < N; k++) petal(36, a0 + (k + 0.5) * TAU / N, 2.1, 0.65, 0.4, [C.lily[0], C.lily[0], C.lily[1]]);   // lớp cánh sau (đậm)
+  for (let k = 0; k < N; k++) petal(75, a0 + k * TAU / N, 1.75, 0.8, 0.68, [C.lily[1], C.lily[2], C.lily[2]]);         // 8 cánh chính
+  for (let i = 0; i < 150; i++) {                                                                                      // nhuỵ xoắn ốc
+    const th = rnd(0, TAU), s = Math.sqrt(rnd(0.12, 1)), rr = q * s * (1 + 0.05 * Math.sin(5 * th));
+    T.push([cx + rr * Math.cos(th), yc + rr * Math.sin(th), C.rose[Math.floor(s * 4.2 + th / TAU * 1.2) % 3]]);
+  }
+  for (let i = 0; i < 35; i++) {                                                                                       // tâm hoa
+    const th = rnd(0, TAU), rr = 0.3 * q * Math.sqrt(Math.random());
+    T.push([cx + rr * Math.cos(th), yc + rr * Math.sin(th), C.core]);
+  }
+
+  // cuống hoa
+  bouquetLines.push({ x1: cx, y1: yc + 2.0 * q, cx1: cx, cy1: (yc + 2.0 * q + Ye) / 2, x2: cx, y2: Ye, color: C.stem[0], width: Math.max(3.5, q * 0.11) });
+
+  // 2 chiếc lá hai bên cuống
+  for (const side of [-1, 1]) {
+    const bx = cx + side * 0.1 * q, by = yc + 3.2 * q, ang = 28 * Math.PI / 180;
+    const dx = side * Math.cos(ang), dy = -Math.sin(ang), L = 2.0 * q;
+    for (let i = 0; i < 70; i++) {
+      const t = Math.pow(Math.random(), 0.85), w = Math.sin(Math.PI * t) * 0.5 * q * rnd(-1, 1);
+      T.push([bx + dx * L * t - dy * w, by + dy * L * t + dx * w, Math.abs(w) < 0.03 * q ? C.green[0] : pick(C.fern)]);
+    }
+  }
+
+  // nơ thắt trên cuống: nút thắt + 2 vòng + 2 đuôi
+  const bs = 1.3;
+  for (let i = 0; i < 170; i++) {
+    const m = Math.random(), sg = Math.random() < 0.5 ? -1 : 1, a = rnd(0, TAU), s = Math.sqrt(Math.random());
+    if (m < 0.1) {
+      T.push([cx + 0.35 * bs * q * s * Math.cos(a), Yb + 0.35 * bs * q * s * Math.sin(a), C.bow[1]]);
+    } else if (m < 0.65) {
+      const ex = 1.15 * bs * q * s * Math.cos(a), ey = 0.55 * bs * q * s * Math.sin(a), ph = -sg * 0.3;
+      T.push([cx + sg * 1.15 * bs * q + ex * Math.cos(ph) - ey * Math.sin(ph),
+              Yb - 0.25 * bs * q + ex * Math.sin(ph) + ey * Math.cos(ph), pick(C.bow)]);
+    } else {
+      const t = Math.random(), dl = Math.hypot(0.45, 1), w = 0.28 * bs * q * (0.6 + 0.8 * t) * rnd(-1, 1);
+      T.push([cx + sg * 0.45 / dl * 2.0 * bs * q * t + w / dl, Yb + 1 / dl * 2.0 * bs * q * t - sg * w * 0.45 / dl, pick(C.bow)]);
+    }
+  }
+
+  // xáo trộn để mỗi trái tim bay tới 1 chỗ ngẫu nhiên
+  for (let i = T.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [T[i], T[j]] = [T[j], T[i]]; }
+
+  window.bouquetLines = bouquetLines;
+  ps = [];
+  for (let i = 0; i < T.length; i++) {
+    const p = {
+      x: rnd(0, W), y: rnd(0, H),
+      sx: rnd(0, W), sy: rnd(0, H),                      // vị trí tản mát
+      ws: rnd(0.6, 1.6), ph: rnd(0, 6.28),
+      size: rnd(9, 15) * sz, delay: rnd(0, 700),
+      beatPhase: rnd(0, Math.PI * 2), beatSpeed: rnd(0.78, 1.35), beatAmp: rnd(0.10, 0.20),
+      c0: pick(PINKS), c1: pick(PINKS),
+      d2: rnd(0, SPREAD), dur: rnd(DUR * 0.8, DUR), arc: rnd(-1, 1), mv: false
+    };
+    // đích 1: trái tim to (35% nằm trên viền cho nét)
+    const t = rnd(-Math.PI, Math.PI), k = Math.random() < 0.35 ? 1 : Math.sqrt(Math.random());
+    p.hx = 16 * Math.pow(Math.sin(t), 3) * k;
+    p.hy = -(13*Math.cos(t) - 5*Math.cos(2*t) - 2*Math.cos(3*t) - Math.cos(4*t)) * k;
+    // đích 2: bông hoa
+    p.fx = T[i][0]; p.fy = T[i][1]; p.c2 = T[i][2];
+    ps.push(p);
+  }
+  floaters = [];
+  for (let i = 0; i < 18; i++)
+    floaters.push({ x: rnd(0, W), y: rnd(0, H), s: rnd(6, 16), v: rnd(10, 35), a: rnd(0.15, 0.45), c: pick(PINKS), ph: rnd(0, 6.28) });
+}
+
+/* ---- Vòng lặp animation ---- */
+const ease = x => x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;   // chậm đầu, nhanh giữa, chậm cuối
+let t0 = performance.now(), last = t0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  const el = now - t0, dt = Math.min((now - last) / 1000, 0.05); last = now;
+  const k = 1 - Math.exp(-dt * 3.5);
+  ctx.clearRect(0, 0, W, H);
+
+  // tim nhỏ bay lơ lửng ở nền
+  for (const f of floaters) {
+    f.y -= f.v * dt; if (f.y < -20) { f.y = H + 20; f.x = rnd(0, W); }
+    ctx.globalAlpha = f.a;
+    const x = f.x + Math.sin(el / 1000 + f.ph) * 12;
+    ctx.drawImage(sprite(f.c), x - f.s / 2, f.y - f.s / 2, f.s, f.s);
+  }
+
+  const beat = 1 + 0.045 * Math.sin(el / 160);
+  // Vẽ cuống/lá trước các hạt để bông hoa có cấu trúc rõ ràng.
+  if (window.bouquetLines) {
+    const flowerProgress = Math.max(0, Math.min(1, (el - T_FLOWER) / (SPREAD + DUR)));
+    if (flowerProgress > 0) {
+      ctx.save();
+      ctx.globalAlpha = 0.96 * flowerProgress;
+      for (const line of window.bouquetLines) {
+        ctx.beginPath();
+        ctx.moveTo(line.x1, line.y1);
+        ctx.quadraticCurveTo(line.cx1, line.cy1, line.x2, line.y2);
+        ctx.strokeStyle = line.color;
+        ctx.lineWidth = line.width;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+        if (line.leaf) {
+          ctx.beginPath();
+          ctx.ellipse((line.x1+line.x2)/2, (line.y1+line.y2)/2, Math.max(3, line.width*1.8), Math.max(2, line.width*0.7), Math.atan2(line.y2-line.y1,line.x2-line.x1), 0, TAU);
+          ctx.fillStyle = line.color;
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+  }
+  ctx.globalAlpha = 0.96;
+  for (const p of ps) {
+    let col, size = p.size;
+    // Mỗi trái tim có nhịp đập riêng, luôn hoạt động ở mọi giai đoạn.
+    const pulse = (Math.sin(el / (185 / p.beatSpeed) + p.beatPhase) + 1) / 2;
+    const individualBeat = 1 + p.beatAmp * pulse;
+    size *= individualBeat;
+    const t2 = el - T_FLOWER - p.d2;                     // thời gian của giai đoạn 3 (riêng mỗi hạt)
+    if (t2 >= 0) {                                       // 3) bay từ trái tim về bông hoa (chậm, cong, mượt)
+      if (!p.mv) { p.mv = true; p.ox = p.x; p.oy = p.y; }
+      const qq = Math.min(1, t2 / p.dur), e = ease(qq);
+      const tx = p.fx + Math.sin(el / 700 + p.fy * 0.01) * 1.5, ty = p.fy;
+      const dx = tx - p.ox, dy = ty - p.oy, len = Math.hypot(dx, dy) || 1;
+      const bend = Math.sin(Math.PI * qq) * p.arc * len * 0.25;   // đường bay hơi cong
+      p.x = p.ox + dx * e - dy / len * bend;
+      p.y = p.oy + dy * e + dx / len * bend;
+      col = qq < 0.5 ? p.c1 : p.c2;
+    } else {
+      let tx, ty;
+      if (el < T_HEART + p.delay) {                      // 1) tản mát
+        tx = p.sx + Math.sin(el / 900 * p.ws + p.ph) * 14;
+        ty = p.sy + Math.cos(el / 1100 * p.ws + p.ph) * 14;
+        col = p.c0;
+      } else {                                           // 2) trái tim to
+        tx = cx + p.hx * hs * beat; ty = hcy + p.hy * hs * beat;
+        col = p.c1; size *= beat;
+      }
+      p.x += (tx - p.x) * k; p.y += (ty - p.y) * k;
+    }
+    // Nhịp đập cá nhân vẫn được giữ cả khi trái tim lớn và bông hoa đang chuyển động.
+    ctx.save();
+    ctx.globalAlpha = 0.82 + pulse * 0.18;
+    if (pulse > 0.78) {
+      ctx.shadowColor = col;
+      ctx.shadowBlur = 3 + pulse * 4;
+    }
+    ctx.drawImage(sprite(col), p.x - size / 2, p.y - size / 2, size, size);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+build(); addEventListener('resize', build); requestAnimationFrame(frame);
+
+/* ---- Nút + lá thư ---- */
+const btn = document.getElementById('openBtn'), overlay = document.getElementById('overlay'),
+      env = document.getElementById('env'), paper = document.getElementById('paper'),
+      msg = document.getElementById('msg');
+let timers = [];
+const later = (fn, ms) => timers.push(setTimeout(fn, ms));
+
+setTimeout(() => btn.classList.add('show'), T_BUTTON);
+
+function openLetter() {
+  overlay.classList.add('on');
+  env.className = 'env'; paper.classList.remove('show'); msg.textContent = ''; msg.classList.remove('done');
+  later(() => env.classList.add('open'), 500);          // mở nắp phong bì
+  later(() => { env.classList.add('out'); paper.classList.add('show'); }, 2000); // thư bay ra
+  later(() => {                                          // hiệu ứng gõ chữ
+    const chars = [...MESSAGE]; let i = 0;
+    const tick = () => {
+      msg.textContent = chars.slice(0, ++i).join('');
+      if (i < chars.length) timers.push(setTimeout(tick, 60)); else msg.classList.add('done');
+    };
+    tick();
+  }, 2900);
+}
+function closeLetter() { overlay.classList.remove('on'); timers.forEach(clearTimeout); timers = []; }
+
+btn.addEventListener('click', openLetter);
+document.getElementById('closeBtn').addEventListener('click', closeLetter);
+overlay.addEventListener('click', e => { if (e.target === overlay) closeLetter(); });
+</script>
+</body>
+</html>
